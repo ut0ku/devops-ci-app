@@ -129,3 +129,32 @@ jobs:
           docker push "${IMAGE_NAME}:${GITHUB_SHA}" | tee push-sha.log
           docker push "${IMAGE_NAME}:latest" | tee push-latest.log
           grep -E 'digest: sha256:' push-sha.log push-latest.log
+
+  deploy:
+    needs: image
+    # Условие: только для push в main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Запуск на вашем self-hosted runner
+    runs-on: [self-hosted, devops-vm]
+    permissions:
+      contents: read # Требование 6 из таблицы 2
+    # Защита от параллельных деплоев
+    concurrency:
+      group: deploy-devops-vm
+      cancel-in-progress: false # Требование 5
+    env:
+      VM_HOST: 192.168.56.107
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false # Токен для git push не нужен
+
+      - name: Deploy with Ansible
+        working-directory: ansible
+        # Требование 3: передаем SHA через -e, чтобы не менять group_vars/all.yml
+        run: ansible-playbook site.yml -e "app_tag=${{ github.sha }}"
+
+      - name: Check through Nginx
+        # Требование 4: проверка /health с флагом --fail (завершится ошибкой при 4xx/5xx)
+        run: curl --fail --silent --show-error --max-time 10 "http://${{ env.VM_HOST }}/health"
